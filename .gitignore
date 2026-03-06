@@ -1,0 +1,8 @@
+node_modules/
+.env
+uploads/
+error.txt
+error2.txt
+error_utf8.txt
+error_utf8_2.txt
+frontend/dist/
