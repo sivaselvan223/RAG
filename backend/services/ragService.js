@@ -1,31 +1,27 @@
 import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
 import { OllamaEmbeddings } from '@langchain/ollama';
-import { ChromaClient } from 'chromadb';
+import { MemoryVectorStore } from 'langchain/vectorstores/memory';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import fs from 'fs';
 
-let chromaClient = null;
-let collection = null;
+let memoryStore = null;
 let embeddings = null;
 
 /**
- * Initialize ChromaDB client and collection
+ * Initialize MemoryVectorStore
  */
 async function initVectorStore() {
-    if (collection) return collection;
+    if (memoryStore) return memoryStore;
 
-    chromaClient = new ChromaClient();
     embeddings = new OllamaEmbeddings({
         model: process.env.EMBEDDING_MODEL || 'nomic-embed-text',
         baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
     });
 
-    collection = await chromaClient.getOrCreateCollection({
-        name: process.env.CHROMA_COLLECTION || 'rag_documents',
-    });
+    memoryStore = new MemoryVectorStore(embeddings);
 
-    console.log('✅ ChromaDB collection initialized');
-    return collection;
+    console.log('✅ Memory Vector Store initialized');
+    return memoryStore;
 }
 
 /**
@@ -66,26 +62,24 @@ async function generateEmbeddings(chunks) {
 }
 
 /**
- * Store document chunks + embeddings in ChromaDB
+ * Store document chunks + embeddings in memory store
  */
 async function storeInVectorDB(chunks, embeddingVectors, documentId, filename) {
-    const col = await initVectorStore();
+    const store = await initVectorStore();
 
-    const ids = chunks.map((_, i) => `${documentId}_chunk_${i}`);
-    const metadatas = chunks.map((_, i) => ({
-        documentId: documentId.toString(),
-        filename,
-        chunkIndex: i,
+    // Map string chunks into Document objects
+    const documents = chunks.map((chunk, i) => ({
+        pageContent: chunk,
+        metadata: {
+            documentId: documentId.toString(),
+            filename,
+            chunkIndex: i,
+        }
     }));
 
-    await col.add({
-        ids,
-        embeddings: embeddingVectors,
-        documents: chunks,
-        metadatas,
-    });
+    await store.addDocuments(documents);
 
-    console.log(`✅ Stored ${chunks.length} chunks for "${filename}" in ChromaDB`);
+    console.log(`✅ Stored ${chunks.length} chunks for "${filename}" in Memory DB`);
 }
 
 /**
@@ -114,53 +108,38 @@ async function processDocument(filePath, fileType, documentId, filename) {
  * Search vector DB for relevant chunks given a query
  */
 async function searchSimilarChunks(query, topK = 5) {
-    const col = await initVectorStore();
+    const store = await initVectorStore();
 
-    // Generate embedding for the query
-    if (!embeddings) {
-        embeddings = new OllamaEmbeddings({
-            model: process.env.EMBEDDING_MODEL || 'nomic-embed-text',
-            baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-        });
-    }
-    const queryEmbedding = await embeddings.embedQuery(query);
+    const results = await store.similaritySearchWithScore(query, topK);
 
-    const results = await col.query({
-        queryEmbeddings: [queryEmbedding],
-        nResults: topK,
-    });
-
-    // Format results
-    const chunks = [];
-    if (results.documents && results.documents[0]) {
-        for (let i = 0; i < results.documents[0].length; i++) {
-            chunks.push({
-                text: results.documents[0][i],
-                filename: results.metadatas[0][i]?.filename || 'Unknown',
-                score: results.distances ? results.distances[0][i] : null,
-            });
-        }
-    }
+    // Format results to match previous output shape
+    const chunks = results.map(([doc, score]) => ({
+        text: doc.pageContent,
+        filename: doc.metadata?.filename || 'Unknown',
+        score: score,
+    }));
 
     return chunks;
 }
 
 /**
- * Delete all chunks for a specific document from ChromaDB
+ * Delete all chunks for a specific document from MemoryStore
  */
 async function deleteDocumentChunks(documentId) {
-    const col = await initVectorStore();
+    const store = await initVectorStore();
 
     try {
-        // Get all IDs matching this document
-        const results = await col.get({
-            where: { documentId: documentId.toString() },
-        });
+        // Since MemoryStore doesn't have a clean delete method by metadata,
+        // we manually filter out the documents that don't match the ID
+        const docIdStr = documentId.toString();
+        const initialCount = store.memoryVectors.length;
 
-        if (results.ids && results.ids.length > 0) {
-            await col.delete({ ids: results.ids });
-            console.log(`🗑️ Deleted ${results.ids.length} chunks for document ${documentId}`);
-        }
+        store.memoryVectors = store.memoryVectors.filter(
+            vec => vec.metadata?.documentId !== docIdStr
+        );
+
+        const deletedCount = initialCount - store.memoryVectors.length;
+        console.log(`🗑️ Deleted ${deletedCount} chunks for document ${documentId}`);
     } catch (error) {
         console.error(`Error deleting chunks: ${error.message}`);
     }
