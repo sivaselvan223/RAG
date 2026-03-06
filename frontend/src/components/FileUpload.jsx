@@ -63,8 +63,14 @@ export default function FileUpload({ isOpen, onClose, onUploadComplete }) {
             clearInterval(progressInterval);
 
             if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.error || 'Upload failed');
+                let errorMsg = 'Upload failed';
+                try {
+                    const err = await res.json();
+                    errorMsg = err.error || errorMsg;
+                } catch (jsonErr) {
+                    errorMsg = `Server error (${res.status})`;
+                }
+                throw new Error(errorMsg);
             }
 
             setProgress(100);

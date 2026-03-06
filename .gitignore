@@ -1,8 +1,23 @@
 node_modules/
 .env
 uploads/
+frontend/dist/
+backend/venv/
+
+# Error logs
 error.txt
 error2.txt
 error_utf8.txt
 error_utf8_2.txt
-frontend/dist/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temp/screenshots
+*.webp

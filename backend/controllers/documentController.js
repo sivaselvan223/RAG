@@ -9,7 +9,11 @@ import path from 'path';
  */
 export async function uploadDocument(req, res) {
     try {
+        console.log('--- Upload Request Started ---');
+        console.log('File details:', req.file);
+
         if (!req.file) {
+            console.log('❌ No file in request');
             return res.status(400).json({ error: 'No file uploaded' });
         }
 
@@ -17,11 +21,13 @@ export async function uploadDocument(req, res) {
         const ext = path.extname(originalname).toLowerCase().replace('.', '');
 
         if (!['pdf', 'txt'].includes(ext)) {
+            console.log('❌ Invalid file type:', ext);
             // Clean up uploaded file
-            fs.unlinkSync(filePath);
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
             return res.status(400).json({ error: 'Only PDF and TXT files are supported' });
         }
 
+        console.log('Creating DB record...');
         // Create document record in MongoDB
         const doc = await Document.create({
             filename,
@@ -30,6 +36,7 @@ export async function uploadDocument(req, res) {
             fileSize: size,
             status: 'processing',
         });
+        console.log('✅ DB record created:', doc._id);
 
         // Send immediate response
         res.status(201).json({
@@ -38,21 +45,29 @@ export async function uploadDocument(req, res) {
         });
 
         // Process document asynchronously (extract → chunk → embed → store)
-        try {
-            const chunkCount = await processDocument(filePath, ext, doc._id, originalname);
-            doc.chunkCount = chunkCount;
-            doc.status = 'ready';
-            await doc.save();
-            console.log(`✅ Document "${originalname}" processed: ${chunkCount} chunks`);
-        } catch (processError) {
-            doc.status = 'error';
-            doc.errorMessage = processError.message;
-            await doc.save();
-            console.error(`❌ Error processing "${originalname}":`, processError.message);
-        }
+        // Using a non-blocking execution block
+        (async () => {
+            try {
+                console.log(`Starting processing for: ${originalname}`);
+                const chunkCount = await processDocument(filePath, ext, doc._id, originalname);
+                doc.chunkCount = chunkCount;
+                doc.status = 'ready';
+                await doc.save();
+                console.log(`✅ Document "${originalname}" processed: ${chunkCount} chunks`);
+            } catch (processError) {
+                console.error(`❌ Error processing "${originalname}":`, processError);
+                doc.status = 'error';
+                doc.errorMessage = processError.message;
+                await doc.save();
+            }
+        })();
+
     } catch (error) {
         console.error('Upload error:', error);
-        res.status(500).json({ error: 'Failed to upload document' });
+        // Important: check if headers sent to avoid "Headers already sent" error
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to upload document' });
+        }
     }
 }
 

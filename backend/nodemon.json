@@ -1,0 +1,13 @@
+{
+    "verbose": true,
+    "ignore": [
+        "node_modules/",
+        "uploads/",
+        "*.test.js",
+        "*.spec.js"
+    ],
+    "watch": [
+        "./"
+    ],
+    "ext": "js,mjs,json"
+}
